@@ -1,6 +1,6 @@
 {
   "name": "@abcnews/fetch-proxy-cache-client",
-  "version": "1.0.0-pre",
+  "version": "1.0.0",
   "description": "Wrapper client for the fetch-proxy-cache API",
   "main": "index.js",
   "scripts": {
