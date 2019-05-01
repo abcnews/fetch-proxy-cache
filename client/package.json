@@ -1,0 +1,14 @@
+{
+  "name": "@abcnews/fetch-proxy-cache-client",
+  "version": "1.0.0-pre",
+  "description": "Wrapper client for the fetch-proxy-cache API",
+  "main": "index.js",
+  "scripts": {
+    "start": "budo example.js --live --open"
+  },
+  "author": "Colin Gourlay <Gourlay.Colin@abc.net.au>",
+  "license": "ISC",
+  "devDependencies": {
+    "budo": "^11.6.0"
+  }
+}
