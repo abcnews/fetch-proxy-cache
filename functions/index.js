@@ -35,6 +35,11 @@ exports.preset = functions.https.onRequest((req, res) =>
       }
 
       const path = `presets/${name}`;
+
+      if (updating[path]) {
+        return updating[path].then(success).catch(failure);
+      }
+
       const presetRef = db.ref(path);
       const success = data => res.json({ data });
       const failure = error => res.json({ error });
