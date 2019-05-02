@@ -22,7 +22,7 @@ const limiter = new RateLimit({
   windowMs: 15 * 60 * 1000
 });
 
-const updating = {};
+const probes = {};
 
 // Return a preset
 exports.preset = functions.https.onRequest((req, res) =>
@@ -36,29 +36,23 @@ exports.preset = functions.https.onRequest((req, res) =>
 
       const path = `presets/${name}`;
 
-      if (updating[path]) {
-        return updating[path].then(success).catch(failure);
-      }
+      if (!probes[path]) {
+        probes[path] = new Promise((resolve, reject) => {
+          const presetRef = db.ref(path);
 
-      const presetRef = db.ref(path);
-      const success = data => res.json({ data });
-      const failure = error => res.json({ error });
+          presetRef
+            .once('value')
+            .then(snapshot => {
+              const preset = snapshot.val();
 
-      presetRef
-        .once('value')
-        .then(snapshot => {
-          const preset = snapshot.val();
+              if (preset == null) {
+                return reject(REFERENCE_ERROR);
+              }
 
-          if (preset == null) {
-            return failure(REFERENCE_ERROR);
-          }
+              if (preset.latestResponse && preset.latestResponse.time + preset.maxAgeMS > Date.now()) {
+                return resolve(preset.latestResponse.data);
+              }
 
-          if (preset.latestResponse && preset.latestResponse.time + preset.maxAgeMS > Date.now()) {
-            return success(preset.latestResponse.data);
-          }
-
-          if (!updating[path]) {
-            updating[path] = new Promise((resolve, reject) => {
               got(preset.url, Object.assign({}, preset.config))
                 .then(({ body }) => {
                   const data = typeof body === 'object' ? body : JSON.parse(body);
@@ -74,18 +68,22 @@ exports.preset = functions.https.onRequest((req, res) =>
                       resolve(data);
                     })
                     .catch(reject);
-
-                  setTimeout(() => {
-                    delete updating[path];
-                  }, preset.latestResponse.time);
                 })
                 .catch(reject);
-            });
-          }
+            })
+            .catch(reject);
+        });
 
-          updating[path].then(success).catch(failure);
-        })
-        .catch(failure);
+        function always() {
+          setImmediate(() => {
+            delete probes[path];
+          });
+        }
+
+        probes[path].then(always, always);
+      }
+
+      probes[path].then(data => res.json({ data })).catch(error => res.json({ error }));
     })
   )
 );
