@@ -23,4 +23,4 @@ Don't have access to the [project](https://console.firebase.google.com/project/f
 
 ## API client
 
-The `client/` directory of this project contains the source for a simple wrapper class for the API, which is published to npm as `@abcnews/fetch-proxy-cache-client`. Have a look in `example.js` for usage examples.
+The `client/` directory of this project contains the source for a simple XHR-based client for the API, which is published to npm as `@abcnews/fetch-proxy-cache-client`. Have a look in `example.js` for usage examples.
