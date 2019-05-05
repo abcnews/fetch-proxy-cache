@@ -22,68 +22,80 @@ const limiter = new RateLimit({
   windowMs: 15 * 60 * 1000
 });
 
-const probes = {};
-
 // Return a preset
 exports.preset = functions.https.onRequest((req, res) =>
   cors(req, res, () =>
-    limiter(req, res, () => {
+    limiter(req, res, async () => {
       const { name } = req.method === 'POST' ? JSON.parse(req.body) : req.query;
+      const success = data => res.json({ data });
+      const failure = error => res.json({ error });
 
       if (!name) {
-        return res.json({ error: QUERY_ERROR });
+        return failure(QUERY_ERROR);
       }
 
       const path = `presets/${name}`;
+      const lockPath = `locks/${path}`;
+      const lockPathRef = db.ref(lockPath);
 
-      if (!probes[path]) {
-        probes[path] = new Promise((resolve, reject) => {
-          const presetRef = db.ref(path);
-
-          presetRef
-            .once('value')
-            .then(snapshot => {
-              const preset = snapshot.val();
-
-              if (preset == null) {
-                return reject(REFERENCE_ERROR);
-              }
-
-              if (preset.latestResponse && preset.latestResponse.time + preset.maxAgeMS > Date.now()) {
-                return resolve(preset.latestResponse.data);
-              }
-
-              got(preset.url, Object.assign({}, preset.config))
-                .then(({ body }) => {
-                  const data = typeof body === 'object' ? body : JSON.parse(body);
-
-                  preset.latestResponse = {
-                    time: Date.now(),
-                    data
-                  };
-
-                  presetRef
-                    .transaction(_ => preset)
-                    .then(() => {
-                      resolve(data);
-                    })
-                    .catch(reject);
-                })
-                .catch(reject);
-            })
-            .catch(reject);
-        });
-
-        function always() {
-          setImmediate(() => {
-            delete probes[path];
-          });
+      // If this is currently locked, wait
+      await new Promise(resolve => {
+        function lockHandler(snapshot) {
+          if (snapshot.val() === null) {
+            lockPathRef.off('value', lockHandler);
+            resolve();
+          }
         }
 
-        probes[path].then(always, always);
+        lockPathRef.on('value', lockHandler);
+      });
+
+      async function unlockAndRespond(error, data) {
+        await lockPathRef.remove();
+
+        if (error) {
+          return failure(error);
+        }
+
+        success(data);
       }
 
-      probes[path].then(data => res.json({ data })).catch(error => res.json({ error }));
+      const presetRef = db.ref(path);
+
+      presetRef
+        .once('value')
+        .then(async snapshot => {
+          const preset = snapshot.val();
+
+          if (preset == null) {
+            return failure(REFERENCE_ERROR);
+          }
+
+          if (preset.latestResponse && preset.latestResponse.time + preset.maxAgeMS > Date.now()) {
+            return success(preset.latestResponse.data);
+          }
+
+          await lockPathRef.set(true);
+
+          got(preset.url, Object.assign({}, preset.config))
+            .then(({ body }) => {
+              const data = typeof body === 'object' ? body : JSON.parse(body);
+
+              preset.latestResponse = {
+                time: Date.now(),
+                data
+              };
+
+              presetRef
+                .transaction(_ => preset)
+                .then(() => {
+                  unlockAndRespond(null, data);
+                })
+                .catch(unlockAndRespond);
+            })
+            .catch(unlockAndRespond);
+        })
+        .catch(failure);
     })
   )
 );
