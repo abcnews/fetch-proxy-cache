@@ -7,6 +7,7 @@ const got = require('got');
 const ABC_IPS = '203.2.218.'; // ABC-AU is allocated 203.2.218.0 to 203.2.218.255
 const QUERY_ERROR = `Missing query parameter`;
 const REFERENCE_ERROR = `Reference does not exist`;
+const SLASHES_PATTERN = /\//g;
 
 admin.initializeApp();
 
@@ -35,7 +36,7 @@ exports.preset = functions.https.onRequest((req, res) =>
       }
 
       const path = `presets/${name}`;
-      const lockPath = `locks/${path}`;
+      const lockPath = `locks/${path.replace(SLASHES_PATTERN, '__')}`;
       const lockPathRef = db.ref(lockPath);
 
       // If this is currently locked, wait
@@ -89,6 +90,7 @@ exports.preset = functions.https.onRequest((req, res) =>
               presetRef
                 .transaction(_ => preset)
                 .then(() => {
+                  console.info(`Updated ${path} with ${JSON.stringify(data)}`);
                   unlockAndRespond(null, data);
                 })
                 .catch(unlockAndRespond);
