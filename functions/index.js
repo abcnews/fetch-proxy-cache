@@ -23,79 +23,85 @@ const limiter = new RateLimit({
   windowMs: 15 * 60 * 1000
 });
 
+function waitForNull(ref, onFailure) {
+  return new Promise(resolve => {
+    function onValue(snapshot) {
+      if (snapshot.val() == null) {
+        ref.off('value', onValue);
+        resolve();
+      }
+    }
+
+    ref.on('value', onValue, onFailure);
+  });
+}
+
+function waitForAny(ref, onFailure) {
+  return new Promise(resolve => {
+    ref
+      .once('value')
+      .then(snapshot => resolve(snapshot.val()))
+      .catch(onFailure);
+  });
+}
+
 // Return a preset
 exports.preset = functions.https.onRequest((req, res) =>
   cors(req, res, () =>
     limiter(req, res, async () => {
-      const { name } = req.method === 'POST' ? JSON.parse(req.body) : req.query;
       const success = data => res.json({ data });
       const failure = error => res.json({ error });
+      const { name } = req.method === 'POST' ? JSON.parse(req.body) : req.query;
 
       if (!name) {
         return failure(QUERY_ERROR);
       }
 
       const path = `presets/${name}`;
-      const lockPath = `locks/${path.replace(SLASHES_PATTERN, '__')}`;
-      const lockPathRef = db.ref(lockPath);
-
-      // If this is currently locked, wait
-      await new Promise(resolve => {
-        function lockHandler(snapshot) {
-          if (snapshot.val() === null) {
-            lockPathRef.off('value', lockHandler);
-            resolve();
-          }
-        }
-
-        lockPathRef.on('value', lockHandler);
-      });
-
-      async function unlockAndRespond(error, data) {
-        await lockPathRef.remove();
-
-        if (error) {
-          return failure(error);
-        }
-
-        success(data);
-      }
-
       const presetRef = db.ref(path);
 
+      // Get the current preset
+      let preset = await waitForAny(presetRef, failure);
+
+      // Only continue for known presets
+      if (preset == null) {
+        return failure(REFERENCE_ERROR);
+      }
+
+      // If the preset's current value exists and is fresh or is being updated, return it
+      if (
+        preset.latestResponse &&
+        (preset.isBeingUpdated || preset.latestResponse.time + preset.maxAgeMS > Date.now())
+      ) {
+        return success(preset.latestResponse.data);
+      }
+
+      // Update the value, then return it
+      preset.isBeingUpdated = true;
       presetRef
-        .once('value')
-        .then(async snapshot => {
-          const preset = snapshot.val();
-
-          if (preset == null) {
-            return failure(REFERENCE_ERROR);
-          }
-
-          if (preset.latestResponse && preset.latestResponse.time + preset.maxAgeMS > Date.now()) {
-            return success(preset.latestResponse.data);
-          }
-
-          await lockPathRef.set(true);
-
+        .transaction(_ => preset)
+        .then(() => {
           got(preset.url, Object.assign({}, preset.config))
             .then(({ body }) => {
               const data = typeof body === 'object' ? body : JSON.parse(body);
 
+              preset.isBeingUpdated = null;
               preset.latestResponse = {
                 time: Date.now(),
                 data
               };
 
+              // Store it
               presetRef
                 .transaction(_ => preset)
                 .then(() => {
+                  // Then return it
                   console.info(`Updated ${path} with ${JSON.stringify(data)}`);
-                  unlockAndRespond(null, data);
+                  success(data);
                 })
-                .catch(unlockAndRespond);
+                .catch(failure);
             })
-            .catch(unlockAndRespond);
+            .catch(failure);
         })
         .catch(failure);
     })
