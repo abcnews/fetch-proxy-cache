@@ -23,19 +23,6 @@ const limiter = new RateLimit({
   windowMs: 15 * 60 * 1000
 });
 
-function waitForNull(ref, onFailure) {
-  return new Promise(resolve => {
-    function onValue(snapshot) {
-      if (snapshot.val() == null) {
-        ref.off('value', onValue);
-        resolve();
-      }
-    }
-
-    ref.on('value', onValue, onFailure);
-  });
-}
-
 function waitForAny(ref, onFailure) {
   return new Promise(resolve => {
     ref
