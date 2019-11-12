@@ -3,11 +3,13 @@ const RateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
 const functions = require('firebase-functions');
 const got = require('got');
+const tasks = require('./tasks');
 
 const ABC_IPS = '203.2.218.'; // ABC-AU is allocated 203.2.218.0 to 203.2.218.255
 const QUERY_ERROR = `Missing query parameter`;
 const REFERENCE_ERROR = `Reference does not exist`;
 const SLASHES_PATTERN = /\//g;
+const DEFAULT_TTL = 60 * 1000; // 1 minute
 
 admin.initializeApp();
 
@@ -58,7 +60,8 @@ exports.preset = functions.https.onRequest((req, res) =>
       // If the preset's current value exists and is fresh or is being updated, return it
       if (
         preset.latestResponse &&
-        (preset.isBeingUpdated || preset.latestResponse.time + preset.maxAgeMS > Date.now())
+        (preset.isBeingUpdated ||
+          preset.latestResponse.time + (preset.ttl || DEFAULT_TTL) > Date.now())
       ) {
         return success(preset.latestResponse.data);
       }
@@ -68,27 +71,45 @@ exports.preset = functions.https.onRequest((req, res) =>
       presetRef
         .transaction(_ => preset)
         .then(() => {
-          got(preset.url, Object.assign({}, preset.config))
-            .then(({ body }) => {
-              const data = typeof body === 'object' ? body : JSON.parse(body);
+          const onData = data => {
+            preset.isBeingUpdated = null;
+            preset.latestResponse = {
+              time: Date.now(),
+              data
+            };
 
-              preset.isBeingUpdated = null;
-              preset.latestResponse = {
-                time: Date.now(),
-                data
-              };
+            // Store it
+            presetRef
+              .transaction(_ => preset)
+              .then(() => {
+                // Then return it
+                console.info(`Updated ${path} with ${JSON.stringify(data)}`);
+                success(data);
+              })
+              .catch(failure);
+          };
 
-              // Store it
-              presetRef
-                .transaction(_ => preset)
-                .then(() => {
-                  // Then return it
-                  console.info(`Updated ${path} with ${JSON.stringify(data)}`);
-                  success(data);
-                })
-                .catch(failure);
-            })
-            .catch(failure);
+          // Presets either have a single `url` or a `taskName` that matches
+          // a local task, either of which may have a `config` object
+
+          if (preset.url) {
+            return got(preset.url, Object.assign({}, preset.config))
+              .then(({ body }) =>
+                Promise.resolve(
+                  typeof body === 'object' ? body : JSON.parse(body)
+                )
+              )
+              .then(onData)
+              .catch(failure);
+          }
+
+          if (preset.taskName && tasks[preset.taskName]) {
+            return tasks[preset.taskName](preset.config)
+              .then(onData)
+              .catch(failure);
+          }
+
+          failure(new Error(`Preset [${name}] not properly configured.`));
         })
         .catch(failure);
     })
